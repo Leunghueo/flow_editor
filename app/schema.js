@@ -1,6 +1,24 @@
-function supportsMultipleOutputs(type) {
+export function isCondType(type) {
+  return String(type || "").toLowerCase() === "cond";
+}
+
+// Maximum number of outgoing edges (next) a node type may have:
+// cond = exactly 2 (true/false branches), select/switch = unlimited, others = 1.
+export function maxOutputsForType(type) {
   const normalized = String(type || "").toLowerCase();
-  return normalized === "select" || normalized === "switch";
+  if (normalized === "cond") return 2;
+  if (normalized === "select" || normalized === "switch") return Infinity;
+  return 1;
+}
+
+export function supportsMultipleOutputs(type) {
+  return maxOutputsForType(type) > 1;
+}
+
+export function truncateNext(next, type) {
+  const arr = Array.isArray(next) ? next.map(String) : [];
+  const limit = maxOutputsForType(type);
+  return limit === Infinity ? arr : arr.slice(0, limit);
 }
 
 export function newWorkflow() {
@@ -86,8 +104,16 @@ export function validateWorkflow(wf) {
       if (n === "end") continue;
       if (!wf.nodes[n]) errors.push(`${id}.next references missing node: ${n}`);
     }
-    if (!supportsMultipleOutputs(node.type) && next.length > 1) {
-      errors.push(`${id} has ${next.length} next nodes (only select/switch support multiple)`);
+    if (isCondType(node.type)) {
+      if (next.length !== 2) {
+        errors.push(`${id} is cond and must have exactly 2 next nodes (next[0]=true branch, next[1]=false branch), currently ${next.length}`);
+      }
+      const expr = node.args?.expr;
+      const exprOk = (typeof expr === "string" && Boolean(expr.trim()))
+        || (Array.isArray(expr) && expr.length > 0 && expr.every((e) => typeof e === "string" && Boolean(e.trim())));
+      if (!exprOk) errors.push(`${id}.args.expr is missing or empty (cond requires an expression)`);
+    } else if (!supportsMultipleOutputs(node.type) && next.length > 1) {
+      errors.push(`${id} has ${next.length} next nodes (only select/switch/cond support multiple)`);
     }
   }
   return errors;

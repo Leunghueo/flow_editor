@@ -24,7 +24,7 @@ npm run preview
 | `app/utils.js` | `safeJsonParse` / `stableStringify` / `downloadJson` / `clamp` |
 | `app/styles.css` | 全部样式；节点配色：plc 橙、sys 蓝、select 绿、loop 紫 |
 | `public/nodes.json` | **运行时实际加载**的节点模板（前端启动时 `fetch(BASE_URL + "nodes.json")`） |
-| `app/nodes.json` | 旧版节点模板（见下方注意事项，未被运行时加载） |
+| `app/nodes.json` | `public/nodes.json` 的同步副本（运行时不加载，仅防误改错文件；改模板以 `public/` 为准并同步此文件） |
 | `vite.config.js` | Vite + React 插件，dev 端口 5173 |
 
 ## 数据模型（workflow JSON）
@@ -58,12 +58,13 @@ npm run preview
 | `loop_begin` | 循环开始 | `count` 循环计数 |
 | `loop_end` | 循环结束 | 需与 `loop_begin` 配对 |
 
-校验规则（`schema.js: validateWorkflow`）：必须含 `head/end`；`end.next` 必须为空；`next` 引用的节点必须存在；节点键与 `node_id` 必须一致；仅 `select/switch` 允许多个 `next`。
+校验规则（`schema.js: validateWorkflow`）：必须含 `head/end`；`end.next` 必须为空；`next` 引用的节点必须存在；节点键与 `node_id` 必须一致；普通节点最多 1 个 `next`，`select/switch` 不限，**`cond` 必须恰好 2 个**（`next[0]`=真分支、`next[1]`=假分支，与后端 `_validate_graph` 一致），且 `args.expr` 不得为空（单个比较式或非空字符串列表）。
 
 ## 编辑器操作
 
 - **加节点**：左侧节点库拖到画布（吸附 28px 网格，顶栏 Align Grid 可一键对齐已有节点）
-- **连线**：双击源节点进入 connect 模式，再单击目标节点。普通节点 `next` 只保留 1 个（替换），`select/switch` 为追加
+- **连线**：双击源节点进入 connect 模式，再单击目标节点。普通节点 `next` 只保留 1 个（替换），`select/switch` 为追加，`cond` 为追加但上限 2 条（连满会弹窗提示）；cond 连线顺序即分支语义，画布上会标注“真 true / 假 false”，顺序连反可在右侧面板的 next 顺序列表用 ↑↓ 调整
+- **布局**：左侧节点库可点 « 收缩成窄条（» 展开）；右侧属性编辑区左缘可左右拖动调整宽度（280–720px）
 - **选/移**：单击选中，Ctrl/⌘+单击多选，拖动可批量移动；Alt+拖空白框选；拖空白平移画布；滚轮以光标为中心缩放（0.4–2.2）
 - **克隆/删除**：右键菜单，或 Ctrl/⌘+D 克隆、Del/Backspace 删除节点或连线；`head/end` 不可删、不可克隆。克隆会清空 `gnode`，仅保留克隆集合内部的连线
 - **改节点**：右侧面板直接编辑节点 JSON，点 Apply JSON 生效（保存时会自动先应用未生效的草稿）
@@ -72,7 +73,7 @@ npm run preview
 
 ## 注意事项（代码现状）
 
-1. **两份 nodes.json 不一致**：运行时只用 `public/nodes.json`（含 `cond`，2026-10-31 更新）；`app/nodes.json` 是旧版模板（`plc_start/plc_stop/plc_act/switch` 等），未被加载，容易误改错文件。
-2. **`cond` 双出口与前端多出口限制冲突**：后端要求 `cond` 恰好 2 个 `next`，但前端 `supportsMultipleOutputs()` 只放行 `select/switch` —— `updateNode`、Apply JSON、双击连线三处都会把非多出口节点的 `next` 截断为 1 个，`validateWorkflow` 也会把 `cond` 的 2 个 `next` 报为错误。目前在编辑器里无法正常给 `cond` 连第二条分支，只能手改导出 JSON。
-3. `loop_end` 模板的 `desc` 仍写着“循环开始模块”（复制未改）。
+1. **两份 nodes.json**：运行时只用 `public/nodes.json`；`app/nodes.json` 已同步为相同内容（2026-10-31），改模板时两份一起改，避免再次分叉。
+2. **`cond` 支持（2026-10-31 已修）**：`schema.js` 新增 `maxOutputsForType/truncateNext`（cond 上限 2、select/switch 不限、其余 1），连线、Apply JSON、属性更新统一按上限截断；校验对 cond 强制恰好 2 个 `next` 且 `expr` 非空。注意新建 cond 在连满 2 条出线前，左侧 Validation 会一直报“currently N”，这是与后端加载校验对齐的预期提示。
+3. `loop_end` 模板的 `desc` 已更正为“循环结束模块,需与循环开始模块配对”。
 4. 无撤销/重做、无自动保存；工作只存在内存中，靠手动 Save 落盘。

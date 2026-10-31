@@ -83,7 +83,7 @@
       "node_name": "循环结束",
       "type": "loop_end",
       "require_node": "",
-      "desc": "循环开始模块",
+      "desc": "循环结束模块,需与循环开始模块配对",
       "meta": {},
       "args": {
         "delay": 0,

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { newWorkflow, normalizeWorkflow, validateWorkflow } from "./schema.js";
+import { isCondType, newWorkflow, normalizeWorkflow, truncateNext, validateWorkflow } from "./schema.js";
 import { clamp, safeJsonParse, stableStringify } from "./utils.js";
 
 const NODE_WIDTH = 190;
@@ -60,7 +60,15 @@ function buildNodePresets(raw) {
 
 function supportsMultipleOutputs(type) {
   const normalized = String(type || "").toLowerCase();
-  return normalized === "select" || normalized === "switch";
+  return normalized === "select" || normalized === "switch" || normalized === "cond";
+}
+
+// Display label for one outgoing edge. For cond the order of next is the
+// branch semantics: next[0] is the true branch, next[1] the false branch.
+function edgeBranchLabel(fromNode, index) {
+  if (!fromNode) return "";
+  if (isCondType(fromNode.type)) return index === 0 ? "真 true" : index === 1 ? "假 false" : "";
+  return "";
 }
 
 function isConfirmEnabled(node) {
@@ -158,19 +166,33 @@ function routeEdge(fromId, toId, positions) {
       end
     ];
   }
-  return roundedPath(points);
+  const labelPoint = points.length >= 3
+    ? {
+      x: Math.round((points[1].x + points[2].x) / 2),
+      y: Math.round((points[1].y + points[2].y) / 2)
+    }
+    : null;
+  return { path: roundedPath(points), labelPoint };
 }
 
 function buildEdges(workflow) {
   const positions = workflow.ui?.nodes || {};
   const edges = [];
   for (const [fromId, node] of Object.entries(workflow.nodes)) {
-    for (const toId of node.next || []) {
-      if (!positions[fromId] || !positions[toId]) continue;
-      const path = routeEdge(fromId, toId, positions);
-      if (!path) continue;
-      edges.push({ id: `${fromId}->${toId}`, fromId, toId, path });
-    }
+    (node.next || []).forEach((toId, index) => {
+      if (!positions[fromId] || !positions[toId]) return;
+      const routed = routeEdge(fromId, toId, positions);
+      if (!routed) return;
+      edges.push({
+        id: `${fromId}->${toId}`,
+        fromId,
+        toId,
+        path: routed.path,
+        label: edgeBranchLabel(node, index),
+        labelX: routed.labelPoint?.x ?? null,
+        labelY: routed.labelPoint?.y ?? null
+      });
+    });
   }
   return edges;
 }
@@ -230,6 +252,8 @@ export default function App() {
   const [presetLoadError, setPresetLoadError] = useState("");
   const [nodeJsonDraft, setNodeJsonDraft] = useState("");
   const [nodeJsonDraftKey, setNodeJsonDraftKey] = useState("");
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(360);
   const fileInputRef = useRef(null);
 
   const errors = useMemo(() => validateWorkflow(workflow), [workflow]);
@@ -290,9 +314,7 @@ export default function App() {
       const current = next.nodes[nodeId];
       if (!current) return prev;
       next.nodes[nodeId] = { ...current, ...patch };
-      if (!supportsMultipleOutputs(next.nodes[nodeId].type)) {
-        next.nodes[nodeId].next = (next.nodes[nodeId].next || []).slice(0, 1);
-      }
+      next.nodes[nodeId].next = truncateNext(next.nodes[nodeId].next, next.nodes[nodeId].type);
       return next;
     });
   }
@@ -353,9 +375,7 @@ export default function App() {
     const current = nextWorkflow.nodes[selectedIds[0]];
     if (!current) return { ok: false, error: new Error(`Node ${selectedIds[0]} not found`) };
     nextWorkflow.nodes[selectedIds[0]] = { ...current, ...patch };
-    if (!supportsMultipleOutputs(nextWorkflow.nodes[selectedIds[0]].type)) {
-      nextWorkflow.nodes[selectedIds[0]].next = (nextWorkflow.nodes[selectedIds[0]].next || []).slice(0, 1);
-    }
+    nextWorkflow.nodes[selectedIds[0]].next = truncateNext(nextWorkflow.nodes[selectedIds[0]].next, nextWorkflow.nodes[selectedIds[0]].type);
 
     const normalizedText = JSON.stringify(nextWorkflow.nodes[selectedIds[0]], null, 2);
     setWorkflow(nextWorkflow);
@@ -444,6 +464,20 @@ export default function App() {
     setSelectedEdge(null);
     setConnectSourceId(null);
     setContextMenu(null);
+  }
+
+  function reorderNodeNext(nodeId, index, delta) {
+    setWorkflow((prev) => {
+      const next = structuredClone(prev);
+      const node = next.nodes[nodeId];
+      if (!node || !Array.isArray(node.next)) return prev;
+      const target = index + delta;
+      if (target < 0 || target >= node.next.length) return prev;
+      const arr = [...node.next];
+      [arr[index], arr[target]] = [arr[target], arr[index]];
+      node.next = arr;
+      return next;
+    });
   }
 
   function deleteEdge(fromId, toId) {
@@ -568,6 +602,21 @@ export default function App() {
     updateViewport({ x: 0, y: 0, zoom: 1 });
   }
 
+  function beginInspectorResize(event) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = inspectorWidth;
+    function onMove(moveEvent) {
+      setInspectorWidth(clamp(startWidth + (startX - moveEvent.clientX), 280, 720));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   function handleConnect(nodeId) {
     if (!connectSourceId) return false;
     if (connectSourceId === nodeId) {
@@ -579,6 +628,16 @@ export default function App() {
       return true;
     }
 
+    const sourceNode = workflow.nodes[connectSourceId];
+    if (sourceNode && isCondType(sourceNode.type)) {
+      const currentNext = sourceNode.next || [];
+      if (!currentNext.includes(nodeId) && currentNext.length >= 2) {
+        alert("cond 节点最多 2 条出线（next[0]=真分支、next[1]=假分支），已经连满。请先删除一条连线再重连，或在右侧面板调整 next 顺序。");
+        setConnectSourceId(null);
+        return true;
+      }
+    }
+
     setWorkflow((prev) => {
       const next = structuredClone(prev);
       const fromNode = next.nodes[connectSourceId];
@@ -586,6 +645,10 @@ export default function App() {
       fromNode.next = Array.isArray(fromNode.next) ? fromNode.next : [];
       if (!supportsMultipleOutputs(fromNode.type)) {
         fromNode.next = [nodeId];
+      } else if (isCondType(fromNode.type)) {
+        if (!fromNode.next.includes(nodeId) && fromNode.next.length < 2) {
+          fromNode.next.push(nodeId);
+        }
       } else if (!fromNode.next.includes(nodeId)) {
         fromNode.next.push(nodeId);
       }
@@ -687,9 +750,25 @@ export default function App() {
         <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={handleFilePicked} />
       </header>
 
-      <div className="layout">
-        <aside className="palette">
-          <div className="panel-title">可用节点</div>
+      <div
+        className="layout"
+        style={{ gridTemplateColumns: `${paletteCollapsed ? 52 : 270}px minmax(0, 1fr) ${inspectorWidth}px` }}
+      >
+        <aside className={`palette ${paletteCollapsed ? "collapsed" : ""}`}>
+          <div className="panel-title palette-head">
+            {paletteCollapsed ? null : <span>可用节点</span>}
+            <button
+              className="icon-btn"
+              title={paletteCollapsed ? "展开工具栏" : "收起工具栏"}
+              onClick={() => setPaletteCollapsed((current) => !current)}
+            >
+              {paletteCollapsed ? "»" : "«"}
+            </button>
+          </div>
+          {paletteCollapsed ? (
+            <div className="palette-collapsed-label">节点库</div>
+          ) : (
+          <>
           <div className="palette-list">
             {nodePresets.map((preset) => (
               <PaletteItem key={preset.key} preset={preset} />
@@ -706,9 +785,12 @@ export default function App() {
             <div className="tip">单击节点进行编辑, +Ctrl可多选节点进行批量可克隆删除操作.</div>
             <div className="tip">Alt+拖拽空白区域可框选多个节点.</div>
             <div className="tip">双击节点可指定下级节点并自动连线</div>
+            <div className="tip">cond 条件分支: 双击后依次点两个目标, 第1条是真分支、第2条是假分支, 顺序可在右侧面板用 ↑↓ 调整</div>
             <div className="tip">Del可删除节点/连线</div>
             <div className="tip">右键可弹出菜单</div>
           </div>
+          </>
+          )}
         </aside>
 
         <Canvas
@@ -753,14 +835,17 @@ export default function App() {
         />
 
         <aside className="inspector">
+          <div className="inspector-resize" title="拖动调整编辑区宽度" onMouseDown={beginInspectorResize} />
           <div className="panel-title">Properties ({selectedIds.length})</div>
           {selectedNode ? (
             <NodeInspector
               nodeId={selectedIds[0]}
               node={selectedNode}
+              workflow={workflow}
               jsonText={nodeJsonDraft}
               onJsonTextChange={setNodeJsonDraft}
               onApplyJson={() => applyNodeJsonDraft({ silent: false })}
+              onReorderNext={reorderNodeNext}
               connectSourceId={connectSourceId}
             />
           ) : selectedIds.length > 1 ? (
@@ -997,15 +1082,19 @@ function Canvas({
       >
         <svg className="wires" aria-hidden="true" viewBox={`0 0 ${SCENE_WIDTH} ${SCENE_HEIGHT}`}>
           {edges.map((edge) => (
-            <path
-              key={edge.id}
-              d={edge.path}
-              className={`wire ${selectedEdge?.id === edge.id ? "wire-selected" : ""} ${connectSourceId === edge.fromId ? "wire-active" : ""}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onEdgeClick(edge);
-              }}
-            />
+            <g key={edge.id}>
+              <path
+                d={edge.path}
+                className={`wire ${selectedEdge?.id === edge.id ? "wire-selected" : ""} ${connectSourceId === edge.fromId ? "wire-active" : ""}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEdgeClick(edge);
+                }}
+              />
+              {edge.label && edge.labelX !== null ? (
+                <text className="wire-label" x={edge.labelX} y={edge.labelY}>{edge.label}</text>
+              ) : null}
+            </g>
           ))}
         </svg>
 
@@ -1057,6 +1146,12 @@ function Canvas({
               </div>
               <div className="node-body">
                 {gnode ? <div className="node-gnode">{gnode}</div> : null}
+                {isCondType(node.type) ? (
+                  <div className="node-expr" title={Array.isArray(node.args?.expr) ? node.args.expr.join(" AND ") : String(node.args?.expr || "")}>
+                    {Array.isArray(node.args?.expr) ? node.args.expr.join(" AND ") : String(node.args?.expr || "expr 未设置")}
+                    {` · 出线 ${(node.next || []).length}/2`}
+                  </div>
+                ) : null}
                 <div className="node-meta">
                   <label
                     className={`node-confirm ${isConfirmEnabled(node) ? "on" : ""}`}
@@ -1086,9 +1181,33 @@ function Canvas({
   );
 }
 
-function NodeInspector({ nodeId, jsonText, onJsonTextChange, onApplyJson, connectSourceId }) {
+function NodeInspector({ nodeId, node, workflow, jsonText, onJsonTextChange, onApplyJson, onReorderNext, connectSourceId }) {
+  const cond = node ? isCondType(node.type) : false;
+  const nextList = node?.next || [];
   return (
     <div className="inspector-body">
+      {cond ? (
+        <div className="branch-hint">
+          cond 条件分支：必须恰好 2 条出线，next[0] = 真分支、next[1] = 假分支（按连线添加的先后顺序）。expr 为单个比较式或列表（多条为 AND），文法同 plc_batch 的 done_list。出线连满后需先删一条再重连。
+        </div>
+      ) : null}
+      {nextList.length ? (
+        <div className="field">
+          <label>next 顺序{cond ? "（顺序即分支语义）" : ""}</label>
+          <div className="next-order-list">
+            {nextList.map((toId, index) => (
+              <div className="next-order-row" key={`${toId}-${index}`}>
+                <span className="next-order-tag">
+                  {cond ? (index === 0 ? "真 true" : "假 false") : `#${index + 1}`}
+                </span>
+                <span className="next-order-name">{workflow?.nodes?.[toId]?.node_name || toId}</span>
+                <button className="icon-btn" title="上移" disabled={index === 0} onClick={() => onReorderNext(nodeId, index, -1)}>↑</button>
+                <button className="icon-btn" title="下移" disabled={index === nextList.length - 1} onClick={() => onReorderNext(nodeId, index, 1)}>↓</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="field">
         <label>node JSON</label>
         <textarea value={jsonText} onChange={(event) => onJsonTextChange(event.target.value)} rows={24} />
@@ -1165,6 +1284,12 @@ function EdgeInspector({ edge, workflow, onDelete }) {
         <label>to</label>
         <input value={toNode?.node_name || edge.toId} readOnly />
       </div>
+      {edge.label ? (
+        <div className="field">
+          <label>branch</label>
+          <input value={edge.label} readOnly />
+        </div>
+      ) : null}
       <div className="field">
         <label>connection</label>
         <div className="hint">Delete removes this edge only.</div>
