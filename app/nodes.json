@@ -1,0 +1,81 @@
+{
+    "PLC开始":{
+        "node_id": "uuid",
+        "node_name": "PLC开始",
+        "type": "plc_start",
+        "desc": "无参数的PLC指令,置ture,监控完成信号",
+        "meta": {},
+        "args": {
+          "delay": 0
+        },
+        "next": []
+    },
+    "PLC停止":{
+        "node_id": "uuid",
+        "node_name": "PLC停止",
+        "type": "plc_stop",
+        "desc": "无参数的PLC指令,置false,不监控信号",
+        "meta": {},
+        "args": {
+          "delay": 0
+        },
+        "next": []
+    },
+    "PLC执行":{
+        "node_id": "uuid",
+        "node_name": "PLC执行",
+        "type": "plc_act",
+        "desc": "带参数的PLC指令,先设置参数,然后置ture,监控完成信号",
+        "meta": {},
+        "args": {
+          "delay": 0,
+          "参数1":-1
+        },
+        "next": []
+    },
+    "SYS指令":{
+        "node_id": "uuid",
+        "node_name": "上位机指令",
+        "type": "sys",
+        "desc": "上位机指令,根据args的algo区分",
+        "meta": {},
+        "args": {
+          "algo": "wait",
+          "data":{}
+        },
+        "next": []
+    },
+    "分支选择":{
+        "node_id": "uuid",
+        "node_name": "分支选择",
+        "type": "switch",
+        "desc": "选择后续分支流程",
+        "meta": {},
+        "args": {
+          "delay": 0
+        },
+        "next": []
+    },
+    "循环开始":{
+        "node_id": "uuid",
+        "node_name": "循环开始模块",
+        "type": "loop_begin",
+        "desc": "循环开始模块,需指定计数",
+        "meta": {},
+        "args": {
+          "delay": 0
+        },
+        "next": []
+    },
+    "循环结束":{
+        "node_id": "uuid",
+        "node_name": "循环结束模块",
+        "type": "loop_begin",
+        "desc": "循环开始模块,需连接开始模块",
+        "meta": {},
+        "args": {
+          "delay": 0
+        },
+        "next": []
+    }
+}

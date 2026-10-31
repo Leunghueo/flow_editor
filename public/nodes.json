@@ -1,0 +1,95 @@
+{
+  "plc_batch":{
+      "node_id": "uuid",
+      "node_name": "PLC并发执行",
+      "type": "plc_batch",
+      "require_node": "",
+      "desc": "可以执行并行的plc写入操作",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false,
+        "info":"",
+        "actlist":[
+          {"pt_name":"查表", "value": "bool/number", "reset": true}
+        ]
+      },
+      "gnode": "",
+      "next": []
+  },
+  "sys":{
+      "node_id": "uuid",
+      "node_name": "上位机指令",
+      "type": "sys",
+      "require_node": "",
+      "desc": "上位机指令,根据args的algo区分",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false,
+        "info":"",
+        "algo": "wait",
+        "data":{"seconds":1}
+      },
+      "gnode": "",
+      "next": []
+  },
+  "select":{
+      "node_id": "uuid",
+      "node_name": "分支模块",
+      "type": "select",
+      "require_node": "",
+      "desc": "选择后续分支流程",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false
+      },
+      "gnode": "",
+      "next": []
+  },
+  "cond":{
+      "node_id": "uuid",
+      "node_name": "条件分支",
+      "type": "cond",
+      "require_node": "",
+      "desc": "按表达式选择分支: expr 为真走 next 第一个, 为假走第二个; expr 可为单个比较式或列表(AND), 文法同 plc_batch 的 done_list",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false,
+        "expr": "点名=值"
+      },
+      "gnode": "",
+      "next": []
+  },
+  "loop_begin":{
+      "node_id": "uuid",
+      "node_name": "循环开始",
+      "type": "loop_begin",
+      "require_node": "",
+      "desc": "循环开始模块,需指定计数",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false,
+        "count":1
+      },
+      "gnode": "",
+      "next": []
+  },
+  "loop_end":{
+      "node_id": "uuid",
+      "node_name": "循环结束",
+      "type": "loop_end",
+      "require_node": "",
+      "desc": "循环开始模块",
+      "meta": {},
+      "args": {
+        "delay": 0,
+        "confirm": false
+      },
+      "gnode": "",
+      "next": []
+  }
+}
