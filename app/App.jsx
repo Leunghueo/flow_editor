@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { isCondType, newWorkflow, normalizeWorkflow, truncateNext, validateWorkflow } from "./schema.js";
-import { clamp, safeJsonParse, stableStringify } from "./utils.js";
+import { buildFragmentPayload, clamp, parseFragmentPayload, safeJsonParse, stableStringify } from "./utils.js";
 
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 96;
@@ -38,6 +38,16 @@ function makeNodeId(nodes) {
     id = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
   } while (nodes[id]);
   return id;
+}
+
+function uniqueNodeName(baseName, nodes) {
+  const base = typeof baseName === "string" && baseName.trim() ? baseName : "node";
+  const used = new Set(Object.values(nodes).map((node) => node?.node_name));
+  if (!used.has(base)) return base;
+  if (!used.has(`${base} Copy`)) return `${base} Copy`;
+  let index = 2;
+  while (used.has(`${base} Copy ${index}`)) index += 1;
+  return `${base} Copy ${index}`;
 }
 
 function makeDefaultNodeName(type, nodes) {
@@ -255,6 +265,7 @@ export default function App() {
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(360);
   const fileInputRef = useRef(null);
+  const pasteSerialRef = useRef(0);
 
   const errors = useMemo(() => validateWorkflow(workflow), [workflow]);
   const selectedNode = selectedIds.length === 1 ? workflow.nodes[selectedIds[0]] || null : null;
@@ -455,6 +466,86 @@ export default function App() {
       for (const sourceId of sourceIds) {
         const cloneId = mapping[sourceId];
         next.nodes[cloneId].next = (next.nodes[sourceId].next || [])
+          .filter((toId) => mapping[toId])
+          .map((toId) => mapping[toId]);
+      }
+      return next;
+    });
+    setSelectedIds(Object.values(mapping));
+    setSelectedEdge(null);
+    setConnectSourceId(null);
+    setContextMenu(null);
+  }
+
+  async function copyNodes(nodeIds) {
+    const fragment = buildFragmentPayload(workflow.nodes, workflow.ui?.nodes, nodeIds, workflow.id);
+    setContextMenu(null);
+    if (!fragment) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(fragment));
+    } catch (error) {
+      alert("复制失败：浏览器未授予剪贴板写入权限。请在 localhost/https 页面下、保持页面焦点后重试。");
+    }
+  }
+
+  function insertFragment(fragment) {
+    const entries = Object.entries(fragment.nodes || {});
+    if (!entries.length) return;
+    const positions = fragment.positions || {};
+    const pts = entries.map(([id]) => positions[id] || { x: 120, y: 120 });
+    const minX = Math.min(...pts.map((p) => p.x));
+    const minY = Math.min(...pts.map((p) => p.y));
+    const maxX = Math.max(...pts.map((p) => p.x)) + NODE_WIDTH;
+    const maxY = Math.max(...pts.map((p) => p.y)) + NODE_HEIGHT;
+
+    // Repeated pastes of the same fragment step diagonally so they do not
+    // land exactly on top of each other.
+    pasteSerialRef.current += 1;
+    const step = ((pasteSerialRef.current - 1) % 5) * GRID_SIZE;
+
+    let originX;
+    let originY;
+    if (fragment.sourceWorkflowId && fragment.sourceWorkflowId === workflow.id) {
+      originX = minX + CLONE_OFFSET + step;
+      originY = minY + CLONE_OFFSET + step;
+    } else {
+      // Cross-page paste: drop the fragment centered on the visible canvas.
+      const canvasEl = document.querySelector(".canvas");
+      const viewport = workflow.ui?.viewport || { x: 0, y: 0, zoom: 1 };
+      let center = { x: minX, y: minY };
+      if (canvasEl) {
+        const rect = canvasEl.getBoundingClientRect();
+        center = {
+          x: (rect.width / 2 - viewport.x) / viewport.zoom,
+          y: (rect.height / 2 - viewport.y) / viewport.zoom
+        };
+      }
+      originX = center.x - (maxX - minX) / 2 + step;
+      originY = center.y - (maxY - minY) / 2 + step;
+    }
+
+    const mapping = {};
+    setWorkflow((prev) => {
+      const next = structuredClone(prev);
+      for (const [oldId, node] of entries) {
+        const newId = makeNodeId(next.nodes);
+        mapping[oldId] = newId;
+        next.nodes[newId] = {
+          ...structuredClone(node),
+          node_id: newId,
+          node_name: uniqueNodeName(node.node_name, next.nodes),
+          gnode: "",
+          next: []
+        };
+        const pos = positions[oldId] || { x: minX, y: minY };
+        next.ui.nodes[newId] = {
+          x: Math.max(0, Math.round((originX + (pos.x - minX)) / GRID_SIZE) * GRID_SIZE),
+          y: Math.max(0, Math.round((originY + (pos.y - minY)) / GRID_SIZE) * GRID_SIZE)
+        };
+      }
+      for (const [oldId, node] of entries) {
+        const newId = mapping[oldId];
+        next.nodes[newId].next = (node.next || [])
           .filter((toId) => mapping[toId])
           .map((toId) => mapping[toId]);
       }
@@ -715,6 +806,14 @@ export default function App() {
         return;
       }
 
+      if (event.key.toLowerCase() === "c" && (event.ctrlKey || event.metaKey) && selectedIds.length) {
+        // Do not hijack copying a plain text selection (e.g. the workflow id).
+        if (window.getSelection && String(window.getSelection()).length) return;
+        event.preventDefault();
+        copyNodes(selectedIds);
+        return;
+      }
+
       if (event.key !== "Delete" && event.key !== "Backspace") return;
       event.preventDefault();
       if (selectedEdge) {
@@ -726,6 +825,21 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedEdge, selectedIds, workflow]);
+
+  useEffect(() => {
+    function onPaste(event) {
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement
+        && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable);
+      if (isTyping) return;
+      const fragment = parseFragmentPayload(event.clipboardData?.getData("text") || "");
+      if (!fragment) return;
+      event.preventDefault();
+      insertFragment(fragment);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [workflow]);
 
   return (
     <div className="app">
@@ -786,6 +900,7 @@ export default function App() {
             <div className="tip">Alt+拖拽空白区域可框选多个节点.</div>
             <div className="tip">双击节点可指定下级节点并自动连线</div>
             <div className="tip">cond 条件分支: 双击后依次点两个目标, 第1条是真分支、第2条是假分支, 顺序可在右侧面板用 ↑↓ 调整</div>
+            <div className="tip">Ctrl+C 复制选中节点到系统剪贴板, 可跨页面/标签页 Ctrl+V 粘贴 (只保留选中集内部连线)</div>
             <div className="tip">Del可删除节点/连线</div>
             <div className="tip">右键可弹出菜单</div>
           </div>
@@ -863,6 +978,7 @@ export default function App() {
           x={contextMenu.x}
           y={contextMenu.y}
           targetIds={contextMenu.targetIds}
+          onCopy={() => copyNodes(contextMenu.targetIds)}
           onClone={() => cloneNodes(contextMenu.targetIds)}
           onDelete={() => deleteNodes(contextMenu.targetIds)}
           onClose={() => setContextMenu(null)}
@@ -1236,7 +1352,7 @@ function SelectionInspector({ selectedIds }) {
   );
 }
 
-function NodeContextMenu({ x, y, targetIds, onClone, onDelete, onClose }) {
+function NodeContextMenu({ x, y, targetIds, onCopy, onClone, onDelete, onClose }) {
   const removable = targetIds.some((id) => id !== "head" && id !== "end");
 
   return (
@@ -1247,6 +1363,16 @@ function NodeContextMenu({ x, y, targetIds, onClone, onDelete, onClose }) {
       onContextMenu={(event) => event.preventDefault()}
     >
       <div className="context-menu-title">{targetIds.length > 1 ? `${targetIds.length} nodes selected` : targetIds[0]}</div>
+      <button
+        className="context-menu-item"
+        disabled={!removable}
+        onClick={() => {
+          onCopy();
+          onClose();
+        }}
+      >
+        Copy（可跨页粘贴）
+      </button>
       <button
         className="context-menu-item"
         disabled={!removable}

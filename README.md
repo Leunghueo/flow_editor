@@ -21,7 +21,7 @@ npm run preview
 | `app/main.jsx` | React 入口，引入 `App` 与 `styles.css` |
 | `app/App.jsx` | 编辑器主体（约 1175 行）：顶栏 / 节点库 / 画布 / 属性面板 |
 | `app/schema.js` | 工作流数据模型：`newWorkflow()` / `normalizeWorkflow()` / `validateWorkflow()` |
-| `app/utils.js` | `safeJsonParse` / `stableStringify` / `downloadJson` / `clamp` |
+| `app/utils.js` | `safeJsonParse` / `stableStringify` / `downloadJson` / `clamp`，以及跨页片段的 `buildFragmentPayload` / `parseFragmentPayload` |
 | `app/styles.css` | 全部样式；节点配色：plc 橙、sys 蓝、select 绿、loop 紫 |
 | `public/nodes.json` | **运行时实际加载**的节点模板（前端启动时 `fetch(BASE_URL + "nodes.json")`） |
 | `app/nodes.json` | `public/nodes.json` 的同步副本（运行时不加载，仅防误改错文件；改模板以 `public/` 为准并同步此文件） |
@@ -65,6 +65,7 @@ npm run preview
 - **加节点**：左侧节点库拖到画布（吸附 28px 网格，顶栏 Align Grid 可一键对齐已有节点）
 - **连线**：双击源节点进入 connect 模式，再单击目标节点。普通节点 `next` 只保留 1 个（替换），`select/switch` 为追加，`cond` 为追加但上限 2 条（连满会弹窗提示）；cond 连线顺序即分支语义，画布上会标注“真 true / 假 false”，顺序连反可在右侧面板的 next 顺序列表用 ↑↓ 调整
 - **布局**：左侧节点库可点 « 收缩成窄条（» 展开）；右侧属性编辑区左缘可左右拖动调整宽度（280–720px）
+- **跨页复制粘贴**：框选/多选后 Ctrl+C（或右键 Copy）把选中集写进系统剪贴板（片段格式 `{kind:"flow-editor-fragment", version, sourceWorkflowId, nodes, positions}`），在任意编辑器页面/标签页 Ctrl+V 粘贴。粘贴时全部节点重新生成 id、只保留选中集内部连线、`gnode` 清空、重名自动加 ` Copy` 后缀；同页粘贴落在原位置 +48 偏移，跨页粘贴落在目标页当前视口中心，连续粘贴会逐次阶梯偏移避免完全重叠。粘贴走原生 paste 事件（不申请剪贴板读权限），非本编辑器片段的文本会被忽略；在输入框/JSON 文本区内不拦截 Ctrl+C/V
 - **选/移**：单击选中，Ctrl/⌘+单击多选，拖动可批量移动；Alt+拖空白框选；拖空白平移画布；滚轮以光标为中心缩放（0.4–2.2）
 - **克隆/删除**：右键菜单，或 Ctrl/⌘+D 克隆、Del/Backspace 删除节点或连线；`head/end` 不可删、不可克隆。克隆会清空 `gnode`，仅保留克隆集合内部的连线
 - **改节点**：右侧面板直接编辑节点 JSON，点 Apply JSON 生效（保存时会自动先应用未生效的草稿）
